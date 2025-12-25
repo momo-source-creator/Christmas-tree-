@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Celestial Particle Tree</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #010409;
+        overflow: hidden;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+      canvas {
+        display: block;
+      }
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+    </style>
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom": "https://esm.sh/react-dom@^19.2.3",
+    "react-dom/client": "https://esm.sh/react-dom@^19.2.3/client",
+    "three": "https://esm.sh/three@^0.182.0",
+    "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.4.2",
+    "@react-three/drei": "https://esm.sh/@react-three/drei@^10.7.7",
+    "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@^3.0.4",
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0"
+  }
+}
+</script>
+  <link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+      import React, { useState, useCallback, useRef, useEffect, useMemo, Suspense } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import * as THREE from 'three';
+      import { Canvas, useFrame, useThree } from '@react-three/fiber';
+      import { PerspectiveCamera, Stars, Environment, Float, Billboard, Text } from '@react-three/drei';
+      import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
+      import { Hand, Info, Snowflake, Sparkles, PenLine, X, CheckCircle2, Volume2, VolumeX } from 'lucide-react';
+      import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+
+      // --- Constants & Config ---
+      const PARTICLE_COUNT = 80000;
+      const TREE_HEIGHT = 14;
+      const TREE_RADIUS = 5.0;
+      const CARD_COUNT = 40;
+
+      const BLESSINGS_DATA = [
+        { text: "有光", description: "不必急着寻找太阳。哪怕周遭再暗，只要你还在前行，你留下的每一个脚印里，其实都揉进了微光。", weight: 15 },
+        { text: "听雪", description: "世界太吵的时候，就慢下来听听雪落下的声音吧。最珍贵的答案，往往藏在那些最寂静的瞬间里。", weight: 15 },
+        { text: "归心", description: "走了很远的路，看了很多的景，别忘了回头看看出发时的那个自己。心安放的地方，才是你真正的家。", weight: 10 },
+        { text: "如常", description: "万事如意固然美好，但生活如常才是岁月的馈赠。愿你在这份平凡的安稳中，品出最浓郁的幸福。", weight: 15 },
+        { text: "见喜", description: "喜悦不是等来的，而是被发现的。愿你拥有穿透迷雾的眼睛，在寻常的一草一木间，撞见满怀惊喜。", weight: 15 },
+        { text: "冬藏", description: "现在的沉寂不是停滞，而是在泥土下悄悄扎根。请耐心地守护你的灵性，待到春暖，再惊艳盛开。", weight: 10 },
+        { text: "不息", description: "就像这寒冬无法封锁地底的暖流，你内心的力量也从未停止流转。只要还在跳动，生命便永远生机勃勃。", weight: 10 },
+        { text: "Glow", description: "You don’t need to blind the world. Just keep that gentle glow inside you; it’s enough to light up your own path.", weight: 15 },
+        { text: "Still", description: "In the middle of the storm, find your center. Being still isn't about doing nothing; it's about being everything.", weight: 15 },
+        { text: "Bloom", description: "Who says flowers only belong to spring? In the coldest heart of winter, you have the power to bloom.", weight: 15 },
+        { text: "Pure", description: "Let go of the dust, keep the essence. Your heart, in its simplest form, is the most beautiful thing I’ve ever seen.", weight: 10 },
+        { text: "Hush", description: "Shhh... Can you hear that? The universe is whispering a secret just for you. Listen closely with your soul.", weight: 10 }
+      ];
+
+      // --- Helper Utilities ---
+      const wrapText = (ctx, text, maxWidth) => {
+        const words = text.includes(' ') ? text.split(' ') : text.split('');
+        const lines = [];
+        let currentLine = '';
+        for (let n = 0; n < words.length; n++) {
+          const testLine = currentLine + words[n] + (text.includes(' ') ? ' ' : '');
+          const metrics = ctx.measureText(testLine);
+          if (metrics.width > maxWidth && n > 0) {
+            lines.push(currentLine);
+            currentLine = words[n] + (text.includes(' ') ? ' ' : '');
+          } else {
+            currentLine = testLine;
+          }
+        }
+        lines.push(currentLine);
+        return lines;
+      };
+
+      const playPaperRustle = () => {
+        try {
+          const AudioContextClass = (window.AudioContext || window.webkitAudioContext);
+          const audioCtx = new AudioContextClass();
+          const bufferSize = audioCtx.sampleRate * 0.4;
+          const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+          const noise = audioCtx.createBufferSource();
+          noise.buffer = buffer;
+          const filter = audioCtx.createBiquadFilter();
+          filter.type = 'bandpass';
+          filter.frequency.setValueAtTime(1500, audioCtx.currentTime);
+          const gainNode = audioCtx.createGain();
+          gainNode.gain.setValueAtTime(0.0, audioCtx.currentTime);
+          gainNode.gain.linearRampToValueAtTime(0.12, audioCtx.currentTime + 0.05);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+          noise.connect(filter); filter.connect(gainNode); gainNode.connect(audioCtx.destination);
+          noise.start();
+        } catch (e) {}
+      };
+
+      // --- Component: Star Topper ---
+      const StarTopper = () => {
+        const groupRef = useRef();
+        const starShape = useMemo(() => {
+          const shape = new THREE.Shape();
+          const outerRadius = 0.8;
+          const innerRadius = 0.35;
+          const points = 5;
+          for (let i = 0; i < points * 2; i++) {
+            const r = i % 2 === 0 ? outerRadius : innerRadius;
+            const angle = (i * Math.PI) / points - Math.PI / 2;
+            if (i === 0) shape.moveTo(Math.cos(angle) * r, Math.sin(angle) * r);
+            else shape.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+          }
+          shape.closePath();
+          return shape;
+        }, []);
+
+        useFrame(({ clock }) => {
+          if (groupRef.current) {
+            groupRef.current.rotation.y = clock.elapsedTime * 0.8;
+            groupRef.current.scale.setScalar(1.2 + Math.sin(clock.elapsedTime * 4) * 0.1);
+          }
+        });
+
+        return (
+          <group position={[0, TREE_HEIGHT * 0.6 + 0.8, 0]} ref={groupRef}>
+            <mesh>
+              <extrudeGeometry args={[starShape, { depth: 0.2, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05 }]} />
+              <meshStandardMaterial color="#FFD700" metalness={1} roughness={0.1} emissive="#FFA500" emissiveIntensity={2} />
+            </mesh>
+            <pointLight intensity={10} distance={10} color="#FFD700" />
+          </group>
+        );
+      };
+
+      // --- Component: Snow Particles ---
+      const SnowParticles = () => {
+        const SNOW_COUNT = 2500;
+        const pointsRef = useRef();
+        const { positions, velocities, phases } = useMemo(() => {
+          const pos = new Float32Array(SNOW_COUNT * 3);
+          const vel = new Float32Array(SNOW_COUNT);
+          const pha = new Float32Array(SNOW_COUNT);
+          for (let i = 0; i < SNOW_COUNT; i++) {
+            pos[i * 3 + 0] = (Math.random() - 0.5) * 40;
+            pos[i * 3 + 1] = Math.random() * 25;
+            pos[i * 3 + 2] = (Math.random() - 0.5) * 40;
+            vel[i] = 0.05 + Math.random() * 0.1;
+            pha[i] = Math.random() * Math.PI * 2;
+          }
+          return { positions: pos, velocities: vel, phases: pha };
+        }, []);
+
+        useFrame((state) => {
+          if (!pointsRef.current) return;
+          const time = state.clock.elapsedTime;
+          const attr = pointsRef.current.geometry.attributes.position;
+          for (let i = 0; i < SNOW_COUNT; i++) {
+            let y = attr.getY(i) - velocities[i];
+            let x = attr.getX(i) + Math.sin(time * 0.5 + phases[i]) * 0.01;
+            let z = attr.getZ(i) + Math.cos(time * 0.3 + phases[i]) * 0.01;
+            if (y < -1) y = 25;
+            attr.setXYZ(i, x, y, z);
+          }
+          attr.needsUpdate = true;
+        });
+
+        return (
+          <points ref={pointsRef}>
+            <bufferGeometry>
+              <bufferAttribute attach="attributes-position" count={SNOW_COUNT} array={positions} itemSize={3} />
+            </bufferGeometry>
+            <pointsMaterial size={0.12} color="#ffffff" transparent opacity={0.8} blending={THREE.AdditiveBlending} depthWrite={false} sizeAttenuation={true} />
+          </points>
+        );
+      };
+
+      // --- Component: Aurora ---
+      const Aurora = () => {
+        const mat = useMemo(() => new THREE.ShaderMaterial({
+          uniforms: { uTime: { value: 0 }, uColor1: { value: new THREE.Color('#00ff88') }, uColor2: { value: new THREE.Color('#004422') } },
+          vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+          fragmentShader: `
+            uniform float uTime; uniform vec3 uColor1; uniform vec3 uColor2; varying vec2 vUv;
+            float noise(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+            float smoothNoise(vec2 p) {
+              vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+              return mix(mix(noise(i), noise(i + vec2(1.0, 0.0)), f.x), mix(noise(i + vec2(0.0, 1.0)), noise(i + vec2(1.0, 1.0)), f.x), f.y);
+            }
+            void main() {
+              float t = uTime * 0.15;
+              float n = smoothNoise(vec2(vUv.x * 2.5 + t, vUv.y * 1.2 - t)) * smoothNoise(vec2(vUv.x * 4.0 - t, vUv.y * 1.8));
+              float mask = pow(vUv.y, 2.2) * pow(1.0 - vUv.y, 1.0) * 8.0;
+              vec3 color = mix(uColor2, uColor1, n) * n * mask * (0.5 + 0.5 * sin(uTime * 0.4));
+              gl_FragColor = vec4(color, color.g * 0.35);
+            }
+          `,
+          transparent: true, side: THREE.BackSide, depthWrite: false, blending: THREE.AdditiveBlending,
+        }), []);
+        useFrame((s) => mat.uniforms.uTime.value = s.clock.elapsedTime);
+        return (
+          <mesh position={[0, 15, -70]} rotation={[0.3, 0, 0]}>
+            <sphereGeometry args={[140, 32, 32, 0, Math.PI * 2, 0, Math.PI / 1.5]} />
+            <primitive object={mat} />
+          </mesh>
+        );
+      };
+
+      // --- Component: Floating Lucky Cards ---
+      const FloatingCards = ({ handData, customBlessingRequest }) => {
+        const [activeCards, setActiveCards] = useState([]);
+        const wasPinching = useRef(false);
+        const nextId = useRef(0);
+
+        const createCardMaterial = useCallback((text, description) => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 512; canvas.height = 768;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fdf5e6'; ctx.fillRect(0, 0, 512, 768);
+          ctx.lineWidth = 15; ctx.strokeStyle = '#1b4d3e'; ctx.strokeRect(30, 30, 452, 708);
+          ctx.lineWidth = 4; ctx.strokeStyle = '#8b0000'; ctx.strokeRect(45, 45, 422, 678);
+          ctx.fillStyle = '#2c1e1a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          const isChinese = /[\u4e00-\u9fa5]/.test(text);
+          ctx.font = isChinese ? 'bold 120px serif' : 'italic bold 80px "Times New Roman", serif';
+          if (text.length > 5) {
+            ctx.font = isChinese ? 'bold 70px serif' : 'bold 50px serif';
+            wrapText(ctx, text, 400).forEach((line, i) => ctx.fillText(line.trim(), 256, 320 + i * 80));
+          } else { ctx.fillText(text, 256, 340); }
+          if (description) {
+            ctx.font = isChinese ? '26px serif' : '22px serif';
+            const descLines = wrapText(ctx, description, 360);
+            descLines.forEach((line, i) => ctx.fillText(line.trim(), 256, 550 + i * 35));
+          }
+          return new THREE.MeshStandardMaterial({ map: new THREE.CanvasTexture(canvas), roughness: 0.7, metalness: 0.1, emissive: new THREE.Color('#ffffff'), emissiveIntensity: 0 });
+        }, []);
+
+        useEffect(() => {
+          if (customBlessingRequest) {
+            const material = createCardMaterial(customBlessingRequest.text);
+            const id = nextId.current++;
+            setActiveCards(prev => [...prev, { id, material, startPos: new THREE.Vector3(0, 1.5, 4), targetTreePos: new THREE.Vector3((Math.random()-0.5)*2, 2 + Math.random()*6, (Math.random()-0.5)*2), startTime: Date.now()/1000, isCustom: true }]);
+          }
+        }, [customBlessingRequest]);
+
+        useFrame(({ clock }) => {
+          if (handData.isPinching && handData.detected && handData.indexTip && !wasPinching.current) {
+            wasPinching.current = true;
+            playPaperRustle();
+            const b = BLESSINGS_DATA[Math.floor(Math.random() * BLESSINGS_DATA.length)];
+            const worldPos = new THREE.Vector3((handData.indexTip.x - 0.5) * 15, (0.5 - handData.indexTip.y) * 15 + 5, handData.indexTip.z * 5);
+            const id = nextId.current++;
+            setActiveCards(prev => [...prev, { id, text: b.text, material: createCardMaterial(b.text, b.description), startPos: worldPos, targetTreePos: new THREE.Vector3((Math.random()-0.5)*3, 2 + Math.random()*7, (Math.random()-0.5)*3), startTime: clock.elapsedTime }]);
+          } else if (!handData.isPinching) {
+            wasPinching.current = false;
+          }
+        });
+
+        return <group>{activeCards.map(c => <CardItem key={c.id} data={c} onExpire={() => setActiveCards(p => p.filter(x => x.id !== c.id))} />)}</group>;
+      };
+
+      const CardItem = ({ data, onExpire }) => {
+        const meshRef = useRef();
+        const { size, camera } = useThree();
+        const backMat = useMemo(() => new THREE.MeshStandardMaterial({ color: "#d4af37", metalness: 0.9, roughness: 0.1 }), []);
+
+        useFrame(({ clock }) => {
+          if (!meshRef.current) return;
+          const now = data.isCustom ? Date.now() / 1000 : clock.elapsedTime;
+          const elapsed = now - data.startTime;
+          if (elapsed > 15) onExpire();
+
+          const flyInD = 2.2; const stayD = 5.0;
+          const cameraFront = new THREE.Vector3(0, 0, size.width < 768 ? -5.5 : -4.5).applyQuaternion(camera.quaternion).add(camera.position);
+          
+          if (elapsed < flyInD) {
+            const t = 1 - Math.pow(1 - elapsed/flyInD, 4);
+            meshRef.current.position.lerpVectors(data.startPos, cameraFront, t);
+            meshRef.current.quaternion.slerp(camera.quaternion, t);
+            meshRef.current.scale.setScalar((0.05 + t * 1.55) * (size.width < 768 ? 0.65 : 1));
+          } else if (elapsed < flyInD + stayD) {
+            meshRef.current.position.copy(cameraFront);
+            meshRef.current.quaternion.copy(camera.quaternion);
+            meshRef.current.scale.setScalar(1.6 * (size.width < 768 ? 0.65 : 1));
+          } else {
+            const t = Math.min((elapsed - flyInD - stayD) / 4, 1);
+            meshRef.current.position.lerpVectors(cameraFront, data.targetTreePos, t);
+            meshRef.current.scale.setScalar(1.6 * (1 - t * 0.8));
+          }
+        });
+
+        return (
+          <group ref={meshRef}>
+            <mesh>
+              <boxGeometry args={[1, 1.5, 0.02]} />
+              <primitive object={data.material} attach="material-4" />
+              <primitive object={backMat} attach="material-5" />
+              <primitive object={backMat} attach="material-0" />
+              <primitive object={backMat} attach="material-1" />
+              <primitive object={backMat} attach="material-2" />
+              <primitive object={backMat} attach="material-3" />
+            </mesh>
+          </group>
+        );
+      };
+
+      // --- Component: Particle Tree Core ---
+      const ChristmasTree = ({ handData }) => {
+        const pointsRef = useRef();
+        const lightRef = useRef();
+        const morphProgress = useRef(1.0);
+        const explodeFactor = useRef(0.0);
+
+        const { positions, targets, scales, colors, offsets } = useMemo(() => {
+          const pos = new Float32Array(PARTICLE_COUNT * 3);
+          const tar = new Float32Array(PARTICLE_COUNT * 3);
+          const sca = new Float32Array(PARTICLE_COUNT);
+          const col = new Float32Array(PARTICLE_COUNT * 3);
+          const off = new Float32Array(PARTICLE_COUNT * 3);
+          for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const r = 5 + Math.random() * 15; const th = Math.random() * Math.PI * 2; const ph = Math.random() * Math.PI;
+            pos[i*3+0] = r * Math.sin(ph) * Math.cos(th); pos[i*3+1] = r * Math.sin(ph) * Math.sin(th) + 5; pos[i*3+2] = r * Math.cos(ph);
+            const h = Math.random() * 10; const bR = 4 * (1 - h/11); const ang = Math.random() * Math.PI * 2; const rT = Math.pow(Math.random(), 0.5) * bR;
+            tar[i*3+0] = rT * Math.cos(ang); tar[i*3+1] = h; tar[i*3+2] = rT * Math.sin(ang);
+            off[i*3+0] = (Math.random()-0.5)*2; off[i*3+1] = (Math.random()-0.5)*2; off[i*3+2] = (Math.random()-0.5)*2;
+            const isSnow = Math.random() > 0.75;
+            if (isSnow) { col[i*3+0]=1; col[i*3+1]=1; col[i*3+2]=1; sca[i]=0.08+Math.random()*0.1; }
+            else { col[i*3+0]=0.01; col[i*3+1]=0.18; col[i*3+2]=0.12; sca[i]=0.04+Math.random()*0.05; }
+          }
+          return { positions: pos, targets: tar, scales: sca, colors: col, offsets: off };
+        }, []);
+
+        const shader = useMemo(() => new THREE.ShaderMaterial({
+          uniforms: { uTime: { value: 0 }, uMorph: { value: 1.0 }, uExplode: { value: 0.0 } },
+          vertexShader: `
+            uniform float uTime; uniform float uMorph; uniform float uExplode; attribute vec3 target; attribute float scale; attribute vec3 color; attribute vec3 offset; varying vec3 vColor; varying float vAlpha;
+            void main() {
+              vec3 p = mix(position, target, uMorph);
+              vec3 dir = normalize(p - vec3(0.0, 5.0, 0.0));
+              p += dir * uExplode * (1.5 + offset.x);
+              vColor = color; vAlpha = mix(0.4, 1.0, uMorph);
+              vec4 mvP = modelViewMatrix * vec4(p, 1.0);
+              gl_PointSize = scale * (400.0 / -mvP.z); gl_Position = projectionMatrix * mvP;
+            }
+          `,
+          fragmentShader: `varying vec3 vColor; varying float vAlpha; void main() { float d = distance(gl_PointCoord, vec2(0.5)); if (d > 0.5) discard; gl_FragColor = vec4(vColor, (1.0 - d*2.0) * vAlpha); }`,
+          transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+        }), []);
+
+        useFrame(({ clock }) => {
+          shader.uniforms.uTime.value = clock.elapsedTime;
+          let targetE = 0, targetM = 1;
+          if (handData.detected) {
+            if (handData.isOpen) { targetE = 4; targetM = 0; }
+            else if (handData.isFist) { targetE = 0; targetM = 1; morphProgress.current = THREE.MathUtils.lerp(morphProgress.current, 1, 0.15); }
+          }
+          explodeFactor.current = THREE.MathUtils.lerp(explodeFactor.current, targetE, 0.04);
+          morphProgress.current = THREE.MathUtils.lerp(morphProgress.current, targetM, 0.06);
+          shader.uniforms.uExplode.value = explodeFactor.current;
+          shader.uniforms.uMorph.value = morphProgress.current;
+
+          if (lightRef.current && handData.detected && handData.isPointing && handData.indexTip) {
+            lightRef.current.position.set((handData.indexTip.x - 0.5) * 15, (0.5 - handData.indexTip.y) * 15 + 5, handData.indexTip.z * 5);
+            lightRef.current.visible = true;
+          } else if (lightRef.current) { lightRef.current.visible = false; }
+        });
+
+        return (
+          <group>
+            <points ref={pointsRef} frustumCulled={false}>
+              <bufferGeometry>
+                <bufferAttribute attach="attributes-position" count={PARTICLE_COUNT} array={positions} itemSize={3} />
+                <bufferAttribute attach="attributes-target" count={PARTICLE_COUNT} array={targets} itemSize={3} />
+                <bufferAttribute attach="attributes-scale" count={PARTICLE_COUNT} array={scales} itemSize={1} />
+                <bufferAttribute attach="attributes-color" count={PARTICLE_COUNT} array={colors} itemSize={3} />
+                <bufferAttribute attach="attributes-offset" count={PARTICLE_COUNT} array={offsets} itemSize={3} />
+              </bufferGeometry>
+              <primitive object={shader} />
+            </points>
+            <StarTopper />
+            <mesh ref={lightRef}><sphereGeometry args={[0.3]} /><meshBasicMaterial color="#ffffff" /><pointLight intensity={20} color="#ffffff" /></mesh>
+          </group>
+        );
+      };
+
+      // --- Main Scene ---
+      const Scene = ({ handData, customBlessingRequest }) => {
+        const { camera } = useThree();
+        const groupRef = useRef();
+        useFrame((state, delta) => {
+          if (groupRef.current) groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, handData.detected ? (handData.x - 0.5) * Math.PI * 2 : state.clock.elapsedTime * 0.1, 0.05);
+          camera.position.z = THREE.MathUtils.lerp(camera.position.z, handData.detected ? 16 + handData.z * 24 : 22, 0.05);
+          camera.lookAt(0, 3, 0);
+        });
+        return (
+          <>
+            <PerspectiveCamera makeDefault position={[0, 5, 22]} fov={40} />
+            <Stars radius={150} count={8000} factor={6} />
+            <Aurora />
+            <SnowParticles />
+            <FloatingCards handData={handData} customBlessingRequest={customBlessingRequest} />
+            <group ref={groupRef} scale={[0.8, 0.8, 0.8]}>
+              <ChristmasTree handData={handData} />
+              <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -0.6, 0]}>
+                <circleGeometry args={[20, 64]} /><meshStandardMaterial color="#050a0f" roughness={1} />
+              </mesh>
+            </group>
+            <Environment preset="night" />
+            <EffectComposer>
+              <Bloom luminanceThreshold={0.8} mipmapBlur intensity={1.5} />
+              <Vignette eskil={false} offset={0.1} darkness={1.1} />
+            </EffectComposer>
+          </>
+        );
+      };
+
+      // --- Hand Tracker ---
+      const HandTrackerUI = ({ onUpdate }) => {
+        const videoRef = useRef();
+        const canvasRef = useRef();
+        const landmarkerRef = useRef(null);
+
+        useEffect(() => {
+          let landmarker;
+          let animationId;
+
+          const init = async () => {
+            try {
+              const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+              landmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                  modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+                  delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 1
+              });
+              landmarkerRef.current = landmarker;
+
+              const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+              if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+                videoRef.current.onloadeddata = () => {
+                   videoRef.current.play();
+                   detect();
+                };
+              }
+            } catch (e) {
+              console.error("Hand Tracker Initialization Failed:", e);
+            }
+          };
+
+          const detect = () => {
+            if (videoRef.current && landmarkerRef.current) {
+              const startTimeMs = performance.now();
+              const results = landmarkerRef.current.detectForVideo(videoRef.current, startTimeMs);
+              
+              const ctx = canvasRef.current?.getContext('2d');
+              if (ctx) {
+                ctx.clearRect(0, 0, 320, 240);
+                // In a production app, we'd draw landmarks here using MediaPipe's drawing utils if needed.
+              }
+
+              if (results.landmarks?.length > 0) {
+                const lm = results.landmarks[0];
+                const size = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
+                const isOpen = Math.hypot(lm[4].x - lm[20].x, lm[4].y - lm[20].y) > size * 1.5;
+                const pinch = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) < 0.05;
+                const point = !pinch && lm[8].y < lm[6].y && lm[12].y > lm[10].y;
+                const fist = !isOpen && !point && [8, 12, 16, 20].every(i => Math.hypot(lm[i].x - lm[9].x, lm[i].y - lm[9].y) < size * 0.8);
+                
+                onUpdate({
+                  x: (lm[0].x + lm[9].x) / 2,
+                  y: (lm[0].y + lm[9].y) / 2,
+                  z: Math.abs(lm[0].z),
+                  isOpen,
+                  isPointing: point,
+                  isPinching: pinch,
+                  isFist: fist,
+                  indexTip: lm[8],
+                  detected: true
+                });
+              } else {
+                onUpdate({ detected: false });
+              }
+            }
+            animationId = requestAnimationFrame(detect);
+          };
+
+          init();
+
+          return () => {
+            cancelAnimationFrame(animationId);
+            if (landmarker) landmarker.close();
+            if (videoRef.current?.srcObject) {
+              videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+            }
+          };
+        }, [onUpdate]);
+
+        return (
+          <div className="relative w-full h-full bg-black">
+            <video ref={videoRef} className="hidden" playsInline muted />
+            <canvas ref={canvasRef} className="w-full h-full object-cover scale-x-[-1]" width={320} height={240} />
+          </div>
+        );
+      };
+
+      // --- App Entry ---
+      const App = () => {
+        const [handData, setHandData] = useState({ detected: false });
+        const [showInstructions, setShowInstructions] = useState(true);
+        const [isBlessingModalOpen, setIsBlessingModalOpen] = useState(false);
+        const [blessingText, setBlessingText] = useState('');
+        const [showSuccess, setShowSuccess] = useState(false);
+        const [customBlessingRequest, setCustomBlessingRequest] = useState(null);
+        const [isMuted, setIsMuted] = useState(false);
+        const bgmRef = useRef();
+
+        useEffect(() => {
+          bgmRef.current = new Audio('https://cdn.pixabay.com/audio/2022/11/22/audio_feb937f2a1.mp3');
+          bgmRef.current.loop = true; bgmRef.current.volume = 0.4;
+          return () => bgmRef.current.pause();
+        }, []);
+
+        const handleSubmit = (e) => {
+          e.preventDefault(); if (!blessingText.trim()) return;
+          setCustomBlessingRequest({ text: blessingText, timestamp: Date.now() });
+          setIsBlessingModalOpen(false); setBlessingText(''); setShowSuccess(true);
+          setTimeout(() => setShowSuccess(false), 5000);
+        };
+
+        return (
+          <div className="relative w-full h-screen bg-[#010409] overflow-hidden select-none">
+            <Canvas shadowMap gl={{ antialias: false }}>
+              <color attach="background" args={['#010409']} />
+              <Suspense fallback={null}><Scene handData={handData} customBlessingRequest={customBlessingRequest} /></Suspense>
+            </Canvas>
+
+            {/* UI Overlays */}
+            <div className="absolute top-4 left-4 flex gap-2 z-20">
+              <button onClick={() => setShowInstructions(true)} className="p-2 bg-black/40 border border-white/10 rounded-full text-zinc-400 hover:text-white backdrop-blur-md"><Info size={14} /></button>
+              <button onClick={() => { setIsMuted(!isMuted); bgmRef.current.muted = !isMuted; }} className="p-2 bg-black/40 border border-white/10 rounded-full text-zinc-400 hover:text-white backdrop-blur-md">{isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}</button>
+            </div>
+
+            <div className="absolute top-4 right-4 w-20 h-15 bg-black/20 border border-white/5 rounded-xl overflow-hidden backdrop-blur-sm opacity-40 hover:opacity-100 z-20">
+              <HandTrackerUI onUpdate={setHandData} />
+            </div>
+
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 w-full px-4 max-w-4xl z-20">
+              <button onClick={() => setIsBlessingModalOpen(true)} className="flex items-center gap-1.5 px-3 py-1 bg-emerald-600/10 hover:bg-emerald-600/30 border border-emerald-500/20 rounded-full backdrop-blur-xl transition-all active:scale-95"><PenLine size={10} className="text-emerald-400" /><span className="text-[8px] font-bold text-emerald-500 tracking-wider uppercase">挂上祝福</span></button>
+              <div className="flex items-center gap-3 md:gap-5 px-4 md:px-6 py-2.5 md:py-3 bg-black/40 border border-white/10 rounded-2xl backdrop-blur-xl shadow-2xl overflow-x-auto no-scrollbar">
+                <div className={`flex flex-col items-center gap-0.5 ${handData.detected ? 'text-emerald-400' : 'text-zinc-600'}`}><Hand size={14} /><span className="text-[7px] font-bold tracking-wider">Tracker</span></div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-x-5 gap-y-1 text-[8px] md:text-[10px] font-medium text-zinc-400 min-w-max">
+                  <div className="flex items-center gap-1.5"><div className={`w-1 h-1 rounded-full ${handData.isPinching ? 'bg-amber-400 animate-ping' : 'bg-zinc-600'}`} />Pinch (Draw)</div>
+                  <div className="flex items-center gap-1.5"><div className={`w-1 h-1 rounded-full ${handData.isOpen ? 'bg-emerald-500' : 'bg-zinc-600'}`} />Open (Explode)</div>
+                  <div className="flex items-center gap-1.5"><div className={`w-1 h-1 rounded-full ${handData.isFist ? 'bg-blue-500' : 'bg-zinc-600'}`} />Fist (Gather)</div>
+                  <div className="flex items-center gap-1.5"><div className={`w-1 h-1 rounded-full ${handData.isPointing ? 'bg-cyan-400' : 'bg-zinc-600'}`} />Point (Light)</div>
+                </div>
+              </div>
+            </div>
+
+            {showSuccess && <div className="absolute top-20 left-1/2 -translate-x-1/2 flex items-center gap-3 px-6 py-3 bg-emerald-950/80 border border-emerald-500/50 rounded-2xl backdrop-blur-xl z-50"><CheckCircle2 className="text-emerald-400" size={16} /><div className="text-[9px] text-white font-bold uppercase tracking-widest">祝福已升空</div></div>}
+
+            {isBlessingModalOpen && (
+              <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-md p-6">
+                <div className="relative w-full max-w-sm bg-[#0a0f16] border border-emerald-900/50 rounded-3xl p-8 shadow-2xl">
+                  <button onClick={() => setIsBlessingModalOpen(false)} className="absolute top-4 right-4 text-zinc-500 hover:text-white"><X size={18} /></button>
+                  <h2 className="text-lg font-bold text-white mb-6">留下你的祝愿</h2>
+                  <form onSubmit={handleSubmit}><textarea maxLength={40} value={blessingText} onChange={e => setBlessingText(e.target.value)} placeholder="在此输入你的冬日祝福..." className="w-full h-28 bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-sm focus:outline-none focus:border-emerald-500/50 transition-colors resize-none mb-4" /><button type="submit" disabled={!blessingText.trim()} className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-bold rounded-xl transition-all">挂上树梢</button></form>
+                </div>
+              </div>
+            )}
+
+            {showInstructions && (
+              <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-6">
+                <div className="max-w-xs md:max-w-md w-full p-8 bg-[#0a0f16] border border-white/5 rounded-3xl shadow-2xl text-white text-center">
+                  <Snowflake size={40} className="mx-auto mb-6 text-emerald-400 animate-pulse" />
+                  <h1 className="text-2xl font-bold mb-6">Celestial Forest</h1>
+                  <div className="space-y-3 mb-8 text-left">
+                    <div className="flex gap-3 p-3 bg-white/5 rounded-2xl border border-white/5"><div className="w-8 h-8 flex items-center justify-center bg-amber-500/20 rounded-xl text-amber-400"><Sparkles size={16} /></div><div><p className="font-semibold text-xs">Pinch Gesture</p><p className="text-[10px] text-zinc-500">Draw a unique blessing card from the tree.</p></div></div>
+                    <div className="flex gap-3 p-3 bg-white/5 rounded-2xl border border-white/5"><div className="w-8 h-8 flex items-center justify-center bg-emerald-500/20 rounded-xl text-emerald-400"><Hand size={16} /></div><div><p className="font-semibold text-xs">Hand Controls</p><p className="text-[10px] text-zinc-500">Palm to explode, Fist to gather, Point to light.</p></div></div>
+                  </div>
+                  <button onClick={() => { setShowInstructions(false); bgmRef.current.play().catch(() => {}); }} className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95">Begin Journey</button>
+                  <p className="text-[9px] text-zinc-600 mt-4 tracking-[0.2em] uppercase">Merry Christmas Mr. Lawrence (Piano)</p>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

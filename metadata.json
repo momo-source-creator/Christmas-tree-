@@ -1,0 +1,7 @@
+{
+  "name": "Celestial Particle Tree",
+  "description": "An interactive Christmas tree visualizer using 100,000 particles, controllable via hand gestures through your webcam. Features custom shaders, Bloom effects, and real-time motion tracking.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
